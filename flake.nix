@@ -2,16 +2,12 @@
   description = "An example to build Android app using Nix";
 
   inputs = {
-    android.inputs.devshell.follows = "devshell";
-    android.inputs.flake-utils.follows = "flake-utils";
-    android.inputs.nixpkgs.follows = "nixpkgs";
-    android.url = "github:tadfisher/android-nixpkgs/stable";
     devshell.url = "github:numtide/devshell";
+    devshell.inputs.nixpkgs.follows = "nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs = {
-    android,
     devshell,
     flake-utils,
     nixpkgs,
@@ -22,31 +18,50 @@
         pkgs = import nixpkgs {
           inherit system;
           config.allowUnfree = true;
-          overlays = [
-            devshell.overlays.default
-          ];
+          config.android_sdk.accept_license = true;
+          overlays = [devshell.overlays.default];
         };
-        android-sdk = android.sdk.${system} (sdkPkgs:
-          with sdkPkgs; [
-            build-tools-34-0-0
-            cmake-3-22-1
-            cmdline-tools-latest
-            ndk-26-1-10909125
-            platforms-android-34
-            platform-tools
-            skiaparser-3
-            sources-android-34
-          ]);
-        versions = let
-          buildTools = pkgs.lib.lists.findFirst (x: builtins.match "build-tools-.*" x.pname != null) {} android-sdk.packages;
-          ndk =
-            pkgs.lib.lists.findFirst (x: builtins.match "ndk-.*" x.pname != null) {} android-sdk.packages;
-        in {
-          buildToolsFull = buildTools.version + ".0.0";
-          buildToolsShort = buildTools.version;
-          ndk = ndk.version;
+        # TODO: find a way to pull new versions
+        versions = {
+          cmdLineTools = "13.0";
+          tools = "26.1.1";
+          platformTools = "35.0.2";
+          buildTools = "34.0.0";
+          emulator = "35.2.5";
+          platform = "34";
+          cmake = "3.22.1";
+          ndk = "27.0.12077973";
         };
-        toolchain = "${android-sdk}/share/android-sdk/ndk/${versions.ndk}/toolchains/llvm/prebuilt/linux-x86_64";
+        androidComposition = pkgs.androidenv.composeAndroidPackages {
+          cmdLineToolsVersion = versions.cmdLineTools;
+          toolsVersion = versions.tools;
+          platformToolsVersion = versions.platformTools;
+          buildToolsVersions = [versions.buildTools];
+          includeEmulator = true;
+          emulatorVersion = versions.emulator;
+          platformVersions = [versions.platform];
+          includeSources = true;
+          includeSystemImages = true;
+          systemImageTypes = ["google_apis"];
+          abiVersions = ["x86_64" "arm64-v8a"];
+          cmakeVersions = [versions.cmake];
+          includeNDK = true;
+          ndkVersion = versions.ndk;
+          ndkVersions = [versions.ndk];
+          useGoogleAPIs = true;
+          useGoogleTVAddOns = true;
+          includeExtras = [];
+          extraLicenses = [];
+        };
+        androidsdk = androidComposition.androidsdk;
+        # TODO: doesn't work at the moment
+        emulator = pkgs.androidenv.emulateApp {
+          name = "android-flake-example-emulator";
+          platformVersion = versions.platform;
+          systemImageType = "google_apis";
+          abiVersion = "x86_64";
+          enableGPU = false;
+        };
       in {
         formatter = pkgs.alejandra;
         devShell = pkgs.devshell.mkShell {
@@ -54,48 +69,20 @@
           motd = ''
             Entered the Android flake example app development environment.
           '';
-          commands = [
-            {
-              name = "gradleAapt2";
-              help = "Gradle with overriden aapt2";
-              command = let
-                aapt2 = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${android-sdk}/share/android-sdk/build-tools/${versions.buildToolsFull}/aapt2";
-              in ''
-                #!/usr/bin/env -S zsh --login --interactive
-                gradle ${aapt2} "$@"
-              '';
-            }
-            {
-              name = "aarch64-linux-android-clang++";
-              command = ''
-                #!/usr/bin/env -S zsh --login --interactive
-                ${toolchain}/bin/aarch64-linux-android${versions.buildToolsShort}-clang++ "$@"
-              '';
-            }
-            {
-              name = "c++";
-              command = ''
-                #!/usr/bin/env -S zsh --login --interactive
-                ${toolchain}/bin/aarch64-linux-android${versions.buildToolsShort}-clang++ "$@"
-              '';
-            }
-            {
-              name = "aarch64-linux-android-ar";
-              command = ''
-                #!/usr/bin/env -S zsh --login --interactive
-                ${toolchain}/bin/llvm-ar "$@"
-              '';
-            }
-          ];
           env = [
             {
               name = "ANDROID_HOME";
-              value = "${android-sdk}/share/android-sdk";
+              value = "${androidsdk}/libexec/android-sdk";
+            }
+            {
+              name = "GRADLE_OPTS";
+              value = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${androidsdk}/libexec/android-sdk/build-tools/${versions.buildTools}/aapt2";
             }
           ];
           packages = [
-            android-sdk
-            pkgs.androidStudioPackages.stable
+            androidsdk
+            emulator
+            (pkgs.android-studio-full.withSdk androidsdk)
           ];
         };
       }
